@@ -1,0 +1,6 @@
+{
+  "name": "NGPM 全局搜索",
+  "description": "NGPM 网络性能管理系统全局搜索界面",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
