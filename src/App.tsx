@@ -356,12 +356,8 @@ export default function App() {
     analysis_group: false,
   });
 
-  // DIRECTORY MODE: Expanded state for the two categories: 'link' (链路) & 'analysis' (分析组)
-  // Uses the exact interactive style from 图1 ([ ] 链路 (14条) >, [ ] 分析组 (15条) >)
-  const [expandedDirectoryGroups, setExpandedDirectoryGroups] = useState<Record<string, boolean>>({
-    link: true,
-    analysis: false,
-  });
+  // DIRECTORY MODE: Tab selection between 'analysis' (分析组, 第一位) & 'link' (链路, 第二位)
+  const [directoryTab, setDirectoryTab] = useState<'analysis' | 'link'>('analysis');
 
   // Directory trees state
   const [linkDirectoryTree, setLinkDirectoryTree] = useState<DirectoryNode[]>(INITIAL_LINK_DIRECTORY_TREE);
@@ -407,9 +403,13 @@ export default function App() {
   if (viewMode === 'classic') {
     selectedItems = groups.flatMap(g => g.items).filter(i => i.checked);
   } else {
-    const linkLeaves = getDirectoryLeaves(linkDirectoryTree).filter(i => i.checked);
     const analysisLeaves = getDirectoryLeaves(analysisDirectoryTree).filter(i => i.checked);
-    selectedItems = linkLeaves.length > 0 ? linkLeaves : analysisLeaves;
+    const linkLeaves = getDirectoryLeaves(linkDirectoryTree).filter(i => i.checked);
+    if (directoryTab === 'analysis') {
+      selectedItems = analysisLeaves.length > 0 ? analysisLeaves : linkLeaves;
+    } else {
+      selectedItems = linkLeaves.length > 0 ? linkLeaves : analysisLeaves;
+    }
   }
 
   const firstSelected = selectedItems[0];
@@ -460,45 +460,52 @@ export default function App() {
     setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
-  // DIRECTORY MODE: Toggle category accordion expand
-  const toggleDirectoryGroupExpand = (groupKey: 'link' | 'analysis', e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setExpandedDirectoryGroups(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
-  };
-
-  // DIRECTORY MODE: Toggle category group checkbox
-  const toggleDirectoryCategoryCheck = (category: 'link' | 'analysis', e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (category === 'link') {
-      const leaves = getDirectoryLeaves(linkDirectoryTree);
-      const allChecked = leaves.every(i => i.checked);
-      const setTreeCheck = (nodes: DirectoryNode[], targetChecked: boolean): DirectoryNode[] => {
-        return nodes.map(n => ({
-          ...n,
-          checked: targetChecked,
-          children: n.children ? setTreeCheck(n.children, targetChecked) : undefined,
-        }));
-      };
-      setLinkDirectoryTree(prev => setTreeCheck(prev, !allChecked));
-      // Clear analysis group (mutual exclusivity)
-      setAnalysisDirectoryTree(prev => setTreeCheck(prev, false));
-    } else {
-      const leaves = getDirectoryLeaves(analysisDirectoryTree);
-      const allChecked = leaves.every(i => i.checked);
-      const setTreeCheck = (nodes: DirectoryNode[], targetChecked: boolean): DirectoryNode[] => {
-        return nodes.map(n => ({
-          ...n,
-          checked: targetChecked,
-          children: n.children ? setTreeCheck(n.children, targetChecked) : undefined,
-        }));
-      };
-      setAnalysisDirectoryTree(prev => setTreeCheck(prev, !allChecked));
-      // Clear link group (mutual exclusivity)
-      setLinkDirectoryTree(prev => setTreeCheck(prev, false));
+  // Check status of any node in directory tree: 'all' | 'some' | 'none'
+  const getNodeCheckStatus = (node: DirectoryNode): 'all' | 'some' | 'none' => {
+    if (!node.children || node.children.length === 0) {
+      return node.checked ? 'all' : 'none';
     }
+    const descendantLeaves = getDirectoryLeaves([node]);
+    if (descendantLeaves.length === 0) {
+      return node.checked ? 'all' : 'none';
+    }
+    const checkedCount = descendantLeaves.filter(i => i.checked).length;
+    if (checkedCount === descendantLeaves.length) return 'all';
+    if (checkedCount > 0) return 'some';
+    return 'none';
   };
 
-  // DIRECTORY MODE: Toggle node checked state for link tree (链路)
+  const setAllChildrenChecked = (node: DirectoryNode, targetChecked: boolean): DirectoryNode => ({
+    ...node,
+    checked: targetChecked,
+    children: node.children ? node.children.map(c => setAllChildrenChecked(c, targetChecked)) : undefined,
+  });
+
+  const updateTreeCascade = (
+    nodes: DirectoryNode[],
+    targetId: string,
+    forcedChecked?: boolean
+  ): DirectoryNode[] => {
+    return nodes.map(node => {
+      if (node.id === targetId) {
+        const currentStatus = getNodeCheckStatus(node);
+        const shouldCheck = forcedChecked !== undefined ? forcedChecked : currentStatus !== 'all';
+        return setAllChildrenChecked(node, shouldCheck);
+      }
+      if (node.children && node.children.length > 0) {
+        const updatedChildren = updateTreeCascade(node.children, targetId, forcedChecked);
+        const allChecked = updatedChildren.every(c => getNodeCheckStatus(c) === 'all');
+        return {
+          ...node,
+          checked: allChecked,
+          children: updatedChildren,
+        };
+      }
+      return node;
+    });
+  };
+
+  // DIRECTORY MODE: Toggle node checked state for link tree (链路) with full cascade
   const toggleLinkDirectoryNodeCheck = (nodeId: string) => {
     // Clear analysis tree (mutual exclusivity)
     const clearTree = (nodes: DirectoryNode[]): DirectoryNode[] => {
@@ -509,28 +516,10 @@ export default function App() {
       }));
     };
     setAnalysisDirectoryTree(prev => clearTree(prev));
-
-    const updateNode = (nodes: DirectoryNode[]): DirectoryNode[] => {
-      return nodes.map(node => {
-        if (node.id === nodeId) {
-          return {
-            ...node,
-            checked: !node.checked,
-          };
-        }
-        if (node.children) {
-          return {
-            ...node,
-            children: updateNode(node.children),
-          };
-        }
-        return node;
-      });
-    };
-    setLinkDirectoryTree(prev => updateNode(prev));
+    setLinkDirectoryTree(prev => updateTreeCascade(prev, nodeId));
   };
 
-  // DIRECTORY MODE: Toggle node checked state for analysis tree (分析组)
+  // DIRECTORY MODE: Toggle node checked state for analysis tree (分析组) with full cascade
   const toggleAnalysisDirectoryNodeCheck = (nodeId: string) => {
     // Clear link tree (mutual exclusivity)
     const clearTree = (nodes: DirectoryNode[]): DirectoryNode[] => {
@@ -541,25 +530,7 @@ export default function App() {
       }));
     };
     setLinkDirectoryTree(prev => clearTree(prev));
-
-    const updateNode = (nodes: DirectoryNode[]): DirectoryNode[] => {
-      return nodes.map(node => {
-        if (node.id === nodeId) {
-          return {
-            ...node,
-            checked: !node.checked,
-          };
-        }
-        if (node.children) {
-          return {
-            ...node,
-            children: updateNode(node.children),
-          };
-        }
-        return node;
-      });
-    };
-    setAnalysisDirectoryTree(prev => updateNode(prev));
+    setAnalysisDirectoryTree(prev => updateTreeCascade(prev, nodeId));
   };
 
   // DIRECTORY MODE: Toggle folder expand/collapse
@@ -676,17 +647,23 @@ export default function App() {
         return null;
       }
 
-      const isInterfaceHighlight = node.id === 'link-node-if1';
-      const isHs2Highlight = node.id === 'node-hs2';
-      const isHighlighted =
-        (node.checked && !node.isFolder) || isInterfaceHighlight || isHs2Highlight;
+      const checkStatus = getNodeCheckStatus(node);
+      const isHighlighted = checkStatus === 'all' || checkStatus === 'some';
+
+      // Filter logic
+      if (filterMode === 'selected' && checkStatus === 'none') {
+        return null;
+      }
+      if (filterMode === 'unselected' && checkStatus === 'all') {
+        return null;
+      }
 
       return (
         <div key={node.id} className="flex flex-col">
           {/* Node Row */}
           <div
             onClick={() => {
-              if (hasChildren && node.isFolder && node.iconType !== 'interface') {
+              if (hasChildren) {
                 toggleDirectoryNodeExpand(node.id, isLinkTree);
               } else {
                 if (isLinkTree) {
@@ -748,37 +725,33 @@ export default function App() {
               {/* Node Name */}
               <span
                 className={`truncate ${
-                  node.checked ? 'text-gray-900 font-medium' : 'text-gray-700'
+                  checkStatus === 'all' || checkStatus === 'some' ? 'text-gray-900 font-medium' : 'text-gray-700'
                 }`}
               >
                 {node.name}
               </span>
             </div>
 
-            {/* Checkbox for selectable items (multi-selection) */}
-            {(node.iconType === 'interface' ||
-              node.iconType === 'vlan' ||
-              node.iconType === 'fork' ||
-              node.iconType === 'site' ||
-              (!node.isFolder && !node.children)) && (
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (isLinkTree) {
-                    toggleLinkDirectoryNodeCheck(node.id);
-                  } else {
-                    toggleAnalysisDirectoryNodeCheck(node.id);
-                  }
-                }}
-                className={`w-3.5 h-3.5 rounded-xs flex items-center justify-center transition-colors border shrink-0 mr-1.5 ${
-                  node.checked
-                    ? 'bg-[#1890ff] border-[#1890ff] text-white'
-                    : 'bg-white border-gray-300 group-hover:border-blue-400'
-                }`}
-              >
-                {node.checked && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-              </div>
-            )}
+            {/* Checkbox on EVERY level (每一层级都加上选项，可选择下一级所有的内容) */}
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isLinkTree) {
+                  toggleLinkDirectoryNodeCheck(node.id);
+                } else {
+                  toggleAnalysisDirectoryNodeCheck(node.id);
+                }
+              }}
+              className={`w-3.5 h-3.5 rounded-xs flex items-center justify-center transition-colors border shrink-0 mr-1.5 cursor-pointer ${
+                checkStatus === 'all' || checkStatus === 'some'
+                  ? 'bg-[#1890ff] border-[#1890ff] text-white'
+                  : 'bg-white border-gray-300 group-hover:border-blue-400'
+              }`}
+              title={hasChildren ? '点击全选/取消该层级所有内容' : '点击选择'}
+            >
+              {checkStatus === 'all' && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+              {checkStatus === 'some' && <Minus className="w-2.5 h-2.5 stroke-[3]" />}
+            </div>
           </div>
 
           {/* Children */}
@@ -1159,91 +1132,63 @@ export default function App() {
                   </div>
                 )}
 
-                {/* MODE 2: DIRECTORY MODE (目录模式: tab选择为链路与分析组，交互使用图1交互样式) */}
+                {/* MODE 2: DIRECTORY MODE (目录模式: tab切换两个分类，分析组在前，链路在后) */}
                 {viewMode === 'directory' && (
-                  <div className="overflow-y-auto max-h-[460px] py-0.5 text-xs divide-y divide-gray-100">
-                    {/* 分类 1: 链路 (图1 交互样式: Checkbox + 链路 (14条) + Chevron >) */}
-                    <div className="py-0.5">
-                      <div
-                        onClick={() => toggleDirectoryGroupExpand('link')}
-                        className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 cursor-pointer select-none group"
+                  <div className="flex flex-col max-h-[480px]">
+                    {/* Tab 切换栏: 分析组 (第一位) & 链路 (第二位) */}
+                    <div className="flex items-center border-b border-gray-200 px-3 bg-[#fbfcfd] text-xs shrink-0 select-none">
+                      {/* Tab 1: 分析组 (位置替换在第一位) */}
+                      <button
+                        onClick={() => setDirectoryTab('analysis')}
+                        className={`py-2 px-3.5 font-medium transition-colors border-b-2 flex items-center space-x-1.5 -mb-px cursor-pointer ${
+                          directoryTab === 'analysis'
+                            ? 'border-[#1890ff] text-[#1890ff]'
+                            : 'border-transparent text-gray-600 hover:text-[#1890ff]'
+                        }`}
                       >
-                        <div className="flex items-center space-x-2.5 flex-1">
-                          {/* Checkbox */}
-                          <div
-                            onClick={(e) => toggleDirectoryCategoryCheck('link', e)}
-                            className={`w-3.5 h-3.5 rounded-xs flex items-center justify-center transition-colors border ${
-                              isLinkAllChecked || isLinkIndeterminate
-                                ? 'bg-[#1890ff] border-[#1890ff] text-white'
-                                : 'bg-white border-gray-300 hover:border-blue-400'
-                            }`}
-                          >
-                            {isLinkAllChecked && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            {isLinkIndeterminate && <Minus className="w-2.5 h-2.5 stroke-[3]" />}
-                          </div>
+                        <span>分析组</span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded-full font-normal ${
+                            directoryTab === 'analysis'
+                              ? 'bg-[#e6f4ff] text-[#1890ff]'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}
+                        >
+                          {analysisLeaves.length}条
+                        </span>
+                      </button>
 
-                          <span className="font-normal text-gray-800 text-[12px]">
-                            链路 ({linkLeaves.length}条)
-                          </span>
-                        </div>
-
-                        {/* Chevron Arrow */}
-                        <div className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors">
-                          {expandedDirectoryGroups.link ? (
-                            <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-                          ) : (
-                            <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 链路 目录树展开内容 (图1链路目录) */}
-                      {expandedDirectoryGroups.link && (
-                        <div className="flex flex-col bg-white border-t border-gray-50">
-                          {renderDirectoryNodes(linkDirectoryTree, true)}
-                        </div>
-                      )}
+                      {/* Tab 2: 链路 (位置替换在第二位) */}
+                      <button
+                        onClick={() => setDirectoryTab('link')}
+                        className={`py-2 px-3.5 font-medium transition-colors border-b-2 flex items-center space-x-1.5 -mb-px cursor-pointer ${
+                          directoryTab === 'link'
+                            ? 'border-[#1890ff] text-[#1890ff]'
+                            : 'border-transparent text-gray-600 hover:text-[#1890ff]'
+                        }`}
+                      >
+                        <span>链路</span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded-full font-normal ${
+                            directoryTab === 'link'
+                              ? 'bg-[#e6f4ff] text-[#1890ff]'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}
+                        >
+                          {linkLeaves.length}条
+                        </span>
+                      </button>
                     </div>
 
-                    {/* 分类 2: 分析组 (图1 交互样式: Checkbox + 分析组 (15条) + Chevron >) */}
-                    <div className="py-0.5">
-                      <div
-                        onClick={() => toggleDirectoryGroupExpand('analysis')}
-                        className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 cursor-pointer select-none group"
-                      >
-                        <div className="flex items-center space-x-2.5 flex-1">
-                          {/* Checkbox */}
-                          <div
-                            onClick={(e) => toggleDirectoryCategoryCheck('analysis', e)}
-                            className={`w-3.5 h-3.5 rounded-xs flex items-center justify-center transition-colors border ${
-                              isAnalysisAllChecked || isAnalysisIndeterminate
-                                ? 'bg-[#1890ff] border-[#1890ff] text-white'
-                                : 'bg-white border-gray-300 hover:border-blue-400'
-                            }`}
-                          >
-                            {isAnalysisAllChecked && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            {isAnalysisIndeterminate && <Minus className="w-2.5 h-2.5 stroke-[3]" />}
-                          </div>
-
-                          <span className="font-normal text-gray-800 text-[12px]">
-                            分析组 ({analysisLeaves.length}条)
-                          </span>
-                        </div>
-
-                        {/* Chevron Arrow */}
-                        <div className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors">
-                          {expandedDirectoryGroups.analysis ? (
-                            <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-                          ) : (
-                            <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 分析组 目录树展开内容 */}
-                      {expandedDirectoryGroups.analysis && (
-                        <div className="flex flex-col bg-white border-t border-gray-50">
+                    {/* 目录树内容展示 */}
+                    <div className="overflow-y-auto max-h-[430px] py-1 text-xs">
+                      {directoryTab === 'analysis' ? (
+                        <div className="py-1">
                           {renderDirectoryNodes(analysisDirectoryTree, false)}
+                        </div>
+                      ) : (
+                        <div className="py-1">
+                          {renderDirectoryNodes(linkDirectoryTree, true)}
                         </div>
                       )}
                     </div>
